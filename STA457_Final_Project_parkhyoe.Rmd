@@ -1,0 +1,388 @@
+---
+title: "Forecasting Monthly Currency Exchange Rates of Won per Euro"
+author: 
+- name: Hyoeun Park
+  affiliation: University of Toronto
+abstract: "Exchange rate is an important measure to determine the relative economic status of a country compared to another country that uses a different currency. This report  focuses on forecasting the monthly exchange rate of Korean won per euro from October 2021 to July 2022 by implementing a multiplicative seasonal autoregressive integrated moving average model (SARIMA). Results relay that the lowest and highest exchange rate of won per euro occurs in April 2022 and October 2021, respectively, meaning one should buy euros with wons in April 2022 but buy wons with euros in October 2021. Moreover, the spectral analysis showed that 137, 55, and 91 period cycles occur the most in the time process. Finally, it is expected that limitations of the SARIMA model can be improved if a dynamic regression model can be utilized instead for forecasting."
+keywords: "currency exchange rate, euro, won, time series, SARIMA, forecasting"
+date: "Friday, December 17, 2021"
+header-includes:
+  - \usepackage{setspace}\doublespacing
+  - \usepackage{amsmath}
+  - \usepackage{caption}
+    \captionsetup[figure]{labelformat=empty}
+  - \usepackage{float}
+  - \floatplacement{figure}{H}
+  - \usepackage{booktabs}
+geometry: margin=1in
+fontsize: 12pt
+output: 
+  stevetemplates::article2
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, fig.pos = "H")
+library(tidyverse)
+library(astsa)
+library(systemfonts)
+library(knitr)
+library(kableExtra)
+library(ggtext)
+```
+
+```{r launch_data}
+# Make sure to do the following first:
+## Session > Set Working Directory > To Source File Location
+
+# Data set
+## Euro Exchange rates
+### Source: https://www.kaggle.com/lsind18/euro-exchange-daily-rates-19992020?select=euro-daily-hist_1999_2021.csv
+euro <- read.csv("data/euro_exchange/euro-daily-hist_1999_2021.csv")
+```
+
+```{r data_wrangling}
+# Data wrangling
+## Changing variable name: `Period.Unit.` to `date`
+names(euro)[1] <- paste("date")
+
+## Only selecting Korean data
+## and converting `date` to date type
+## Introducing two new variables: `month` and `year`
+euro <- euro %>% 
+  select(date, X.Korean.won..) %>% 
+  mutate(date = as.Date(date),
+         month = months(date),
+         year = format(date, format = "%y"),
+  )
+
+## and changing variable name: `X.Korean.won..` to `won`
+names(euro)[2] <- paste("won")
+
+## Remove rows with no entry
+euro <- euro %>% filter(won != "-") %>% # removes 62 empty rows
+  mutate(won = as.numeric(won))
+
+## Get mean of each month
+## and store it in new data frame
+euro_m <- aggregate(euro$won, list(format(euro$date, "%Y-%m")), mean) %>% 
+  mutate(date = Group.1,
+         won = x) %>% 
+  select(won)
+
+## Converting the data into time series data
+### Daily data
+ts_euro_d <- euro %>% 
+  purrr::map_df(rev) %>% # to make data in date order (index 1 is 1999-01-04)
+  select(won) %>% 
+  ts()
+### Monthly data
+ts_euro_m <- ts(euro_m, 
+   frequency = 12) # monthly
+```
+
+# I. Introduction
+
+|     Currency exchange rate is the value of one currency in terms of another currency. Exchange rates fluctuate based on multiple factors such as inflation, terms of trade, and economic performance (Twin, 2021). In a nutshell, the exchange rate increases if the economic health is good, while the decrease of it implies the economic health has relatively gotten worse. That is, it depends on the trading supply and demand between two countries that use different currencies. 
+
+An individual that is economically active with foreign currencies should be well-informed on currency exchange rates. For example, an international student who needs to send money from their home country to the country they are studying in should know the trend of exchange rates, so that they can receive more money to spend on their tuition. If a German is interested in buying stocks from Tesla, they would need to know the exchange rates between euro and dollars to know the right times to buy and sell the stocks. Overall, it is essential for one to be able to forecast the upcoming currency exchange rates. 
+
+This report focuses on a data set^[obtained from Kaggle] consisting of daily exchange rates per euro. Euro is the currency of 19 countries in the European Union. There are 45 variables in total, where 44 are currencies compared to euros and the remaining one refers to the recorded date. The data contains 5,878 observations from January 4, 1999 to September 20, 2021. The entries were recorded around 4 p.m. every day with the exception of 62 entries, which were unavailable^[Some currencies were no longer in use because they were either no longer in use or replaced with euros (e.g., Greek drachma since 2002).]. In general, this data is a great example of time series since the currency exchange rate is recorded in a successive and equally-spaced time manner. 
+
+The analysis in this report focuses on the exchange rate of Korean won per euro. Recently, the popularity of Korean culture has increased in European countries. Especially, there has been a 50% increase in the trade between EU and South Korea since 2010 (Wejchert, 2021). Because the exchange rate is affected by a country's economic status, this report will investigate the exchange rate of won per euro by time series analysis. 
+
+The purpose of this report is to forecast the monthly exchange rate of Korean won per euro. In particular, we are going to forecast the exchange rate of October 2021 to July 2022 using an SARIMA model. In **Statistical Methods**, the data is explored and made stationary, followed by the investigation of sample ACF and PACF to propose appropriate SARIMA models. Then, the final model is suggested in the **Results** section, which is implemented to forecast the next ten months and their 95% prediction intervals. Finally, a spectral analysis is made with a periodogram to identify the three predominant periods and their 95% confidence intervals. In the **Discussion**, we conclude that April 2022 and October 2021 are optimal months to purchase euros and wons, respectively, due to their lowest and highest exchange rate. We also suggest that other methods such as the dynamic regression model can be used to yield higher accuracy of forecasted values.
+
+# II. Statistical Methods
+
+## II-i. Data: Currency Exchange Rate of Won per Euro (1999-2021)
+
+```{r fig1, fig.height=4, results="hide", fig.align='center', include = FALSE}
+
+plot(ts_euro_d, ## Plotting daily data
+     ylab = "won (per euro)", xlab = NULL,
+     col = 3,
+     xaxt= "n") + 
+  theme(legend.text = 
+          ggtext::element_markdown(family = 'Times', face='bold'))
+abline(h = mean(ts_euro_d), 
+       lty = "dashed")
+legend("topright",
+       legend = c("Daily",
+                  "Average"),
+       lty = c(1, 2),
+       col = c(3, 1))
+plot(ts_euro_m, ## Plotting monthly data
+     ylab = "won (per euro)", xlab = "Year",
+     col = 2,
+     xaxt = "n") + theme(
+       legend.text = 
+         ggtext::element_markdown(family = 'Times', face='bold'))
+axis(1, at=c(5, 10, 15, 20), 
+     labels=c("2003",
+              "2008",
+              "2013",
+              "2018"))
+abline(h = mean(ts_euro_m), 
+       lty = "dashed")
+legend("topright",
+       legend = c("Month",
+                  "Average"),
+       lty = c(1, 2),
+       col = c(2, 1))
+```
+
+![Figure 1: Daily (top) and Monthly (bottom) Exchange Rate per Euro in Korean won](Fig1.png){width=60%}
+
+|     Above is Figure 1 depicting the daily and monthly exchange rate per euro in Korean won. The monthly data was made by taking the average of exchange rates for each month, which add up to 273 months in total, from January 1999 to September 2021. One can say that the time periods at 2008-2010 are considered to be outliers since they differ from the overall pattern of other time periods^[The exchange rate of Korean won per euro has dropped around 2010 due to the European Debt Crisis (Kenton, 2021), whereas the Korean economy started to rebound (Kim, 2010).]. Overall, daily and monthly exchange rates have highly similar trends. Thus, we can use the monthly dataset to represent the daily dataset. The monthly dataset would be preferred since it is more time-efficient when running the models. 
+
+As we can see in Figure 1, the time process, denoted as $x_t$, is non-stationary due to heteroscedasticity and seasonality^[In fact, seasonality is natural with many economic data.]. Therefore, we can log-transform to stabilize the variance as homoscedastic, and take the first difference to stabilize the mean and eliminate seasonality. 
+
+```{r dlx_ddlx, out.width="60%", fig.cap="Figure 2: $\\nabla\\log(x_t)$ (dlx) and $\\nabla^{12}\\nabla\\log(x_t)$ (ddlx) of monthly exchange rate", results="hide", fig.align='center'}
+## Difference + Log; 12 Difference + 1 difference + log
+dlx <- diff(log(ts_euro_m))
+ddlx <- diff(diff(log(ts_euro_m)), 12)
+
+## Plot both at once
+plot(cbind(dlx, ddlx),
+     xlab = "Year",
+     col = 5,
+     xaxt = 'n',
+     main="") + theme(
+       legend.text = 
+         ggtext::element_markdown(family = 'Times', face='bold'))
+axis(1, at = c(5, 10, 15, 20),
+     labels=c("2003",
+              "2008",
+              "2013",
+              "2018"))
+```
+
+Now, the log-transformed and first-differenced time series, i.e., $y_t = \nabla \log(x_t) = \log(x_t) - \log(x_{t-1}) = p_t - p_{t-1}$, is called the *growth rate* of the exchange rate. That is, $y_t$ is the percentage change in exchange rate from one month to the next month. However, as seen in `dlx` of Figure 2, $\nabla \log(x_t)$ still has some seasonality occurring every 12 months, i.e., $\nabla log(x_t) \approx \nabla log(x_{t-12})$. Hence, a twelfth-order difference is applied again, which makes the time series subtly more stationary as shown in the process of `ddlx`.
+
+```{r acf_pacf, include=FALSE}
+# Predicting models using ACF and PACF
+acf2(diff(diff(log(ts_euro_m)), 12), max.lag = 60,
+     main = "Differenced and log-transformed process",
+     plot=TRUE)
+```
+
+![Figure 3: Sample ACF and PACF of $\nabla^{12}\nabla\log(x_t)$](acf_pacf.png){width=60%}
+
+Using $\nabla^{12}\nabla\log(x_t)$, we can generate the sample ACF and PACF as in Figure 3. Based on the two, we can infer the seasonal and non-seasonal components of the potential models. 
+
+First, we can find the seasonal component of a potential model. Observe that the sample ACF roughly cuts off at lag $h=Qs$, where $s = 12$ and $Q = 1$. Furthermore, the sample PACF tails off at lags $h = 12, 24, 36,$ and $48$. Hence, we can say that they tail off around $h = 1s, 2s, 3s, ...$ where $s = 12$. Overall, these results suggest an SMA(1) model, where $P = 0, Q = 1$ and $s = 12$. 
+
+Then, we can determine the non-seasonal component. Looking at the lower lags, we observe several possibilities for the ARIMA(p,1,q) model. Firstly, both the sample ACF and PACF are tailing off after lag $h=1$, so we can propose $p=q=1$. We could also say that the sample ACF tails off after $h = 1$, while the PACF cuts off at lag $h=1$. Hence, $p=1$ and $q=0$. In another case, the sample ACF cuts off at lag $h=1$ and the sample PACF tails off after lag $h = 1$. Thus, $p=0$ and $q=1$ are suggested.
+
+To summarize the findings above, we can propose the three following models for the time process: (i) Model 1: $\text{ARIMA}(1,1,1) \times (0,1,1)_{12}$ (ii) Model 2: $\text{ARIMA}(0,1,1) \times (0,1,1)_{12}$ (iii) Model 3: $\text{ARIMA}(1,1,0) \times (0,1,1)_{12}$
+
+# III. Results
+
+## III-i. Model Selection
+
+|     The final model will be selected based on the significance of the parameter estimates and the model selection criteria. Then, the diagnostic plots will come into play to assess the assumptions of the final model.
+
+```{r model_table}
+# See chunk `suggested_models` for the three potential models
+
+# Creating columns for Table 1
+names <- c("Model 1 (p=d=q=1)", "P-value", "Model 2 (p=0, d=q=1)", "P-value", "Model 3 (p=d=1, q=0)", "P-value")
+ar1 <- c(0.1028, 0.5763, "-", "-", 0.2749, "0.0000")
+ma1 <- c(0.1892, 0.2896, 0.2806, "0.0000", "-", "-")
+sma1 <- c(-0.9217, 0, -0.9245, 0, -0.9218, 0)
+aic <- c(-4.5075, "-", "-4.5140", "-", "-4.5110", "-")
+aicc <- c(-4.5071, "-", -4.5138, "-", -4.5108, "-")
+bic <- c(-4.4527, "-", -4.4729, "-", -4.4699, "-")
+tbl1_dat <- data.frame(names, ar1, ma1, sma1, aic, aicc, bic)
+
+# Generating table with the dataset created above
+table_1 <- kable(tbl1_dat,
+      col.names = c("Models (s = 12)", 
+                    "$\\hat{\\phi}$", "$\\hat{\\theta}$", "$\\hat{\\Theta}$", 
+                    "AIC", "AICc", "BIC"),
+      align = "c",
+      caption = "Parameter Estimates and Model Selection Criteria",
+      format = "latex",
+      escape = FALSE,
+      booktabs = TRUE) %>% 
+  kable_styling(position = "center", protect_latex = TRUE,
+                latex_options = "hold_position") %>% 
+  add_indent(c(2, 4, 6), level_of_indent = 2) %>% 
+  add_header_above(c(" " = 1, "Parameter Estimates" = 3, "Model Selection Criteria" = 3))
+
+# See Table 1
+table_1
+```
+
+When we fit the three potential models to $\nabla log(x_t)$, we achieve the results as shown in Table 1. First, we can easily dismiss Model 1 since the p-values of the parameter estimates are not significant under the significance level $\alpha = 0.05$. That is, $\alpha <$ p-value. Hence, we fail to reject the null hypothesis that the estimates are 0 (not effective). 
+
+On the other hand, Model 2 and 3 have $\alpha >$ p-value for the parameter estimates. In other words, we reject the null hypothesis that the estimates are 0, so the parameter estimates have statistical significance. Hence, it is likely that these two models are suitable than Model 1. Comparing the $AIC, AIC_c$ and $BIC$ of the two models, we notice that Model 2 has lower values for all three model selection criteria compared to Model 3. Since the diagnostic plots for each model are very similar to one another in Figure 4, we ultimately select Model 2, or **$\text{ARIMA}(0,1,1)\times(0,1,1)_{12}$** as the final model. 
+
+The model equation will be written as follows:
+$$\begin{split}
+\log(\hat{x}_t) = \log(x_{t-1} + x_{t-12} - x_{t-13} + w_t + 0.2806w_{t-1} -0.9245w_{t-12} -0.9245w_{t-13})
+\end{split}$$
+From the equation, we say that the growth rate of the currency exchange rate of won per euro increases by 0.2806 for every unit increase in the first past error ($w_{t-1}$). Similarly, the growth rate decreases by 0.9245 for every unit increase in the twelfth or thirteenth past error ($w_{t-12}$ and $w_{t-13}$, respectively). Note that in all of these interpretations, it is assumed that other past errors and past currency exchange rates are fixed. 
+
+Now, let us proceed to the diagnostic plots of $\text{ARIMA}(0,1,1)\times(0,1,1)_{12}$^[Interpretations for the diagnostic plots of Model 1 and Model 3 are similar- hence, omitted.]. The standardized residuals plots show no trend and no heteroscedastic variance. There seems to be a few outliers close to 3 standard deviations in magnitude, but there is not much. Then, the ACF of residuals also show no significant deviation from being random residuals since all sample ACF for each lag is under the blue dashed line. Next, the Normal Q-Q plot of standardized residuals show that the residuals are normally distributed, with subtle deviation on both tails. Finally, the Ljung-Box statistic shows that most of the lag points are above $\alpha = 0.05$, indicating that we fail to reject the null hypothesis that the residuals are independent. In conclusion, Model 2 satisfies all the model assumptions, which makes it viable to use for forecasting. 
+
+```{r suggested_models, results = 'hide', out.width='45%', fig.align = 'center', fig.show = "hold", fig.cap="Figure 4: Diagnostic plots of Model 1 (top left), Model 2 (bottom), and Model 3 (top right)"}
+# Logged data
+leuro <- log(ts_euro_m)
+
+
+par(mfrow=c(1,3))
+sarima(leuro, 
+       p = 1, d = 1, q = 1, 
+       P = 0, D = 1, Q = 1, 
+       S = 12)
+sarima(leuro, 
+       p = 0, d = 1, q = 1, 
+       P = 0, D = 1, Q = 1, 
+       S = 12) # smallest AIC, AICc, BIC
+sarima(leuro, 
+       p = 1, d = 1, q = 0, 
+       P = 0, D = 1, Q = 1, 
+       S = 12)
+```
+
+## III-ii. Forecasting the next ten months
+
+|     Using $\text{ARIMA}(0,1,1)\times(0,1,1)_{12}$ model, we can forecast the growth rates ($\log(x_t)$) of the ten months from October 2021 to July 2022 as in Figure 5. Table 2, which summarizes the growth rate and the exchange rates (so, the original value) as well as their 95% confidence intervals, shows that the highest currency exchange rate is in October 2021, while the lowest one occurs in April 2022. 
+
+According to Exchange Rates (2021), the average currency exchange rates for October, November, and December 2021 (as of December 15, 2021) were 1370.90, 1352.76, and 1334.60, respectively. Comparing it to our forecasted values of these three months, we observe that they do not accurately align with the actual exchange rates. However, the actual values are still captured within the 95% confidence intervals.
+
+```{r forecast, out.width = "60%", fig.align = "center", fig.cap = "Figure 5: Forecasting the next ten months after September 2021", results = 'hide', fig.show = 'hold'}
+for10mos <- sarima.for(leuro, 10, 0, 1, 1, 0, 1, 1, 12)
+legend("topleft",legend=c("Data", "Forecast"),
+       pch = c(1, 1),
+       col = c(1, 6))
+title(sub = "Figure 3")
+```
+
+```{r predint}
+# Finding the 95% prediction interval
+## Lower bound
+lower <- for10mos$pred - qnorm(0.975)*for10mos$se
+## Upper bound
+upper <- for10mos$pred + qnorm(0.975)*for10mos$se
+
+# Obtaining actual values from website
+data <- c(mean(c(1371, 1369, 1370, 1376, 1376, 1376, 1376, 1385, 1384, 1381, 1382, 1377, 1372, 1372, 1372, 1372, 1377, 1368, 1371, 1371, 1371, 1371, 1371, 1357, 1355, 1362, 1368, 1358, 1358, 1358)),
+          mean(c(1366, 1365, 1370, 1370, 1365, 1365, 1367, 1390, 1366, 1361, 1363, 1350, 1350, 1350, 1345, 1340, 1337, 1346, 1344, 1344, 1342, 1338, 1338, 1332, 1335, 1354, 1354, 1350, 1345, 1341)),
+          mean(c(1333, 1331, 1340, 1340, 1337, 1332, 1327, 1330, 1330, 1337, 1336, 1336, 1337, 1334, 1339)))
+
+## Creating a data frame
+month <- c("Oct 2021", "Nov 2021", "Dec 2021", "Jan 2022", "Feb 2022",
+           "Mar 2022", "Apr 2022", "May 2022", "Jun 2022", "Jul 2022")
+pi95 <- data.frame(month,
+                   logpredict = for10mos$pred,
+                   loglower = lower,
+                   logupper = upper,
+                   exchangepredict = exp(for10mos$pred),
+                   exchangelower = exp(lower),
+                   exchangeupper = exp(upper))
+
+## Create Table 2
+table_2 <- kable(pi95,
+      col.names = c(" ", 
+                    "Prediction", "Lower limit", "Upper limit", 
+                    "Prediction", "Lower limit", "Upper limit"),
+      align = "c", 
+      caption = "$95\\%$ Prediction Interval of the Ten Forecasted Months",
+      booktabs = TRUE) %>% 
+  kable_styling(position = "center", latex_options = "hold_position") %>% 
+  add_header_above(c(" " = 1, "Growth Rate (log)" = 3, "Exchange Rate (exp(log))" = 3))
+
+## See Table 2
+table_2
+```
+
+## III-iii. Spectral Analysis
+
+|    Finally, we perform spectral analysis with a periodogram. Figure 6 visualizes the highest frequencies as $\frac{1}{2} = \frac{136.5}{273}, \frac{1}{5} = \frac{54.6}{273},$ and $\frac{1}{3} = \frac{91}{273}$. That is, 137 month-cycle is the most frequently occurring period cycle, followed by the 55 month cycle and the 91 month cycle.
+
+```{r, include = FALSE}
+# Periodogram
+period <- mvspec(ts_euro_m)
+```
+
+```{r periodogram, results = 'hide', out.width = "60%", fig.align = 'center', fig.cap="Figure 6: Spectral Analysis with a Periodogram"}
+# Finding the predominant periods
+n <- as.numeric(length(leuro))
+Freq <- (1:(n-1))/n
+Per <- Mod(fft(ts_euro_m-mean(ts_euro_m)))^2/n
+# y = cbind(1:50, Freq[1:50], Per[1:50]); y[order(y[,3]),] 
+## uncomment above to see highest frequency
+### Freq[2] = 0.0073; Freq[5] = 0.0183; Freq[3] = 0.0109
+# Period = Months/Cycle
+## Order from highest to lowest
+### 1/Freq[2]; 1/Freq[5]; 1/Freq[3] # 136.5; 54.6; 91
+#### uncomment to see results above
+
+# Plotting Periodogram
+plot(Freq[1:50], Per[1:50], type="h",lwd=3, 
+     ylab="Periodogram",xlab="Frequency")
+text(0.035, 1500000, "137 month cycle"); text(0.045, 675000, "55 month cycle"); text(0.0325, 500000, "91 month cycle")
+```
+
+```{r freqci}
+# 95% CI for each dominant frequency
+## Chi-squared: Upper and lower bound 
+U <- qchisq(.025, 2)
+L <- qchisq(0.975, 2)
+lower <- c(2*period$spec[137]/L, 2*period$spec[55]/L, 2*period$spec[91]/L)
+upper <- c(2*period$spec[137]/U, 2*period$spec[55]/U, 2*period$spec[91]/U)
+pgram <- c(2.2500, 146.9047, 2.9187)
+freqs <- c("137 month cycle (First peak)", "55 month cycle (Second peak)", "91 month cycle (Third peak)")
+freq_ci <- data.frame(freq = freqs, pgram = pgram, lower = lower, upper = upper)
+
+## Creating Table 3
+table_3 <- kable(freq_ci, 
+                 col.names = c("Period", "Periodogram spectrum", 
+                               "Lower bound", "Upper bound"),
+      caption = "$95\\%$ Confidence Interval of the Three Predominant Periods.",
+      booktabs = TRUE) %>% 
+  kable_styling(latex_options = "hold_position") %>% 
+  add_header_above(c(" " = 2, "95% Confidence Interval" = 2))
+
+## See Table 3
+table_3
+```
+
+Noting that $\chi_2^2(0.025) \approx 0.05064$ and $\chi_2^2(0.975) \approx 7.3778$, we can find the 95% confidence intervals of the three predominant frequencies. All confidence intervals are extremely wide, so one must be careful in using them. 
+
+The first and third peak cannot have their significance established. The periodogram ordinate (2.2500) of the first peak lies within the 95% confidence interval of the third peak. Similarly, the periodogram ordinate of the third peak, 2.9187, falls within the 95% confidence interval of the first peak. However, the periodogram ordinate of the second peak, 146.9047, is neither in the first nor the third peak's confidence interval. The lower bound of the second peak is also higher than the periodogram ordinates of the other two peaks, so we can say that the periodogram spectrum of the second peak is significant compared to the other two. 
+
+# IV. Discussion
+## IV-i. Conclusion
+
+|     Forecasting results suggest that the exchange rate is expected to be the highest in October 2021, which is 1385.767 won per euro. Hence, this is predicted to be the optimal month to buy won since one can acquire more won for a relatively small amount of euros. Moreover, the model forecasts the lowest exchange rate to take place in April 2022 (1368.421 won per euro). So, it is best to buy euros since one can earn more euros for a less amount of won. 
+
+Finally, the periodogram suggested wide band of cycles for all three predominant periods: 137 months per cycle, 55 months per cycle, and 91 months per cycle (order is from most prominent to least prominent). This could indicate that the exchange rates of won per euro is overall irregular or unpredictable. Especially, 137 months per cycle could refer to the large change that occurred around 2010. 
+
+## IV-ii. Limitation
+
+|     The forecasted exchange rates of October, November, and December 2021 did not precisely align with the actual exchange rates^[See Table 2. 1385.77 (forecast) and 1370.90 (actual) is quite of a difference in currency exchange rates (since the former is a 1.011% increase of the latter)]. So, there could be another model that could yield more accurate results. For instance, one could reexamine the ACF and PACF of $\nabla^{12}\nabla\log(x_t)$, or use a completely different type of model, like a dynamic regression model. A dynamic regression model helps one forecast the time series using additional predictors (Athanasopoulos & Hyndman, n.d.). Since currency exchange rates fluctuate based on several factors, investigating the time process based on multiple predictors might help increase the accuracy of forecasts. Inspecting on daily exchange rates rather than monthly could yield more precise forecasting results as well, since it has more observations and exchange rates differ daily.
+
+\newpage
+
+# References
+
+|  Athanasopoulos, G & Hyndman, R. (n.d.). *Chapter 9 Dynamic regression models*. 
+|      Forecasting: Principles and Practice. https://otexts.com/fpp2/dynamic.html
+|  Chemkaeva, D. (2021, Sep). Daily Exchange Rates per Euro 1999-2021. [Data file].
+|      https://www.kaggle.com/lsind18/euro-exchange-daily-rates-19992020
+|  *Euro (EUR) to South Korean Won (KRW) exchange rate history*. (n.d.). Exchange Rates. 
+|      Retrieved Dec 16, 2021, from
+|      https://www.exchangerates.org.uk/EUR-KRW-exchange-rate-history.html
+|  Kenton, W. (2021, Oct 28). *European Sovereign Debt Crisis.* Investopedia.
+|      https://www.investopedia.com/terms/e/european-sovereign-debt-crisis.asp
+|  Kim, S. (2010, Jul 9). *Rate hike heralds start of Korea's stimulus exit.* 
+|      Yonhap News Agency.
+|      https://web.archive.org/web/20130520065613/http://english.yonhapnews.co.kr/
+|      business/2010/07/09/45/0503000000AEN20100709006500320F.HTML
+|  Twin, A. (2021, Jun 8). *6 Factors That Influence Exchange Rates.* Investopedia.
+|      https://www.investopedia.com/trading/factors-influence-exchange-rates/
+|  Wejchert, S. (2021, Sep 8). *EU-South Korea FTA: A Ten-Year Perspective.* EIAS.
+|      https://eias.org/policy-briefs/eu-south-korea-fta-a-ten-year-perspective/
